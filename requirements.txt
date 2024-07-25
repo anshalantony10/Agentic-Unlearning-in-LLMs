@@ -1,0 +1,13 @@
+openai
+fire
+loguru
+datasets
+typer
+rich
+openai
+langchain_nvidia_ai_endpoints
+langchain_community
+faiss-cpu
+datasets
+tenacity
+together
