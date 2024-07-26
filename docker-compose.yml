@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  moa-rag-app:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY}
+      - NVIDiA_API_KEY=${NVIDiA_API_KEY}
+    ports:
+      - "8501:8501"
+    command: streamlit run streamlit-rag-app.py

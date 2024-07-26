@@ -8,14 +8,18 @@ from langchain.vectorstores import FAISS
 from datasets import load_dataset
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings, ChatNVIDIA
+from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
+
+from dotenv import load_dotenv
+load_dotenv()
 import time
 
 # Set environment variables
-os.environ['NVIDIA_API_KEY'] = "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"
-os.environ['TOGETHER_API_KEY'] = "55c1e769a63fa5d8d94294e8d82f9a0df9b15df85cb908993fa5344611089b4e"
+os.environ['NVIDIA_API_KEY'] =  os.getenv('NVIDIA_API_KEY')
+os.environ['TOGETHER_API_KEY'] = os.getenv('TOGETHER_API_KEY')
 
 # Initialize Together clients
 client = Together(api_key=os.environ.get("TOGETHER_API_KEY"))
@@ -49,7 +53,8 @@ Provide a response that answers the question without using any specific names or
 
 @st.cache_resource
 def setup_rag():
-    embeddings = NVIDIAEmbeddings()    
+    # embeddings = NVIDIAEmbeddings()  
+    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")  
     dataset = load_dataset("WutYee/HarryPotter_books_1to7")
         
     documents = []

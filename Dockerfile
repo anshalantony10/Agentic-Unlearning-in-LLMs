@@ -3,4 +3,7 @@ FROM python:3.8
 WORKDIR /app
 COPY . /app
 RUN pip install -r requirements.txt
-CMD ["python", "moa-with-rag.py"]
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "streamlit-rag-app.py"]
