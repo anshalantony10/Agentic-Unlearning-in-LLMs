@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  moa-rag-app:
+  moa-rag-app-google:
     build: .
     volumes:
       - .:/app

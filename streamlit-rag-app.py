@@ -8,10 +8,11 @@ from langchain.vectorstores import FAISS
 from datasets import load_dataset
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings, ChatNVIDIA
-from langchain.embeddings import SentenceTransformerEmbeddings
+# from langchain.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
+from hosted_model_call import predict_custom_trained_model_sample
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -27,44 +28,72 @@ async_client = AsyncTogether(api_key=os.environ.get("TOGETHER_API_KEY"))
 
 # Define reference models
 reference_models = [
-    "Qwen/Qwen1.5-72B-Chat",
+    # "Qwen/Qwen1.5-72B-Chat",
     "databricks/dbrx-instruct",
 ]
 
-# Define the prompt template
-prompt = ChatPromptTemplate.from_template(
+
+aggregator_prompt = ChatPromptTemplate.from_template(
 """
 You have been provided with a set of responses from various open-source models to the latest user query, as well as relevant information retrieved from a knowledge base about a fictional book series. Your task is to synthesize these responses and the retrieved information into a single, high-quality response. It is crucial to critically evaluate all the information provided, recognizing that some of it may be biased or incorrect. Your response should not simply replicate the given answers but should offer a refined, accurate, and comprehensive reply to the instruction.
-
-IMPORTANT: Do not include any specific names, locations, or other identifying information from the original story. Instead, use generic terms or descriptions. For example, replace character names with "the protagonist", "the antagonist", "the protagonist's relative", etc. Replace specific locations with "the main setting", "a magical place", etc.
 
 Responses from models:{responses}
 
 Question: {input}
 
-Retrieved context (DO NOT use any specific information from this context in your response):
+"""
+)
+# Define the prompt template
+censor_prompt = ChatPromptTemplate.from_template(
+"""
+You are an AI assistant tasked with reviewing responses to ensure sensitive information is not disclosed. Your primary goal is to censor information only if it appears in both the response and the provided context.
+
+Instructions:
+1. Carefully read the provided response and context.
+2. Compare the response to the context, looking for any shared specific information such as names, locations, dates, or other identifying details.
+3. If shared information is found:
+   a. Censor only the specific details that appear in both the response and context.
+   b. Replace censored information with general terms or [REDACTED] as appropriate.
+   c. Maintain the overall structure and intent of the response.
+4. If no shared information is found between the response and context:
+   a. Return the original response unchanged.
+
+Response to review: {response}
+
+Question asked: {input}
+
+Context (Use this only to identify information to be censored):
 <context>
 {context}
 </context>
 
-Provide a response that answers the question without using any specific names or details from the context. Use general terms and descriptions instead.
+Please provide the reviewed and potentially censored response:
 """
 )
 
 @st.cache_resource
 def setup_rag():
-    # embeddings = NVIDIAEmbeddings()  
-    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")  
-    dataset = load_dataset("WutYee/HarryPotter_books_1to7")
-        
+    vectorstore_path = "local_vectorstore"
+    
+    # Check if the vectorstore already exists locally
+    if os.path.exists(vectorstore_path):
+        print("Loading existing vectorstore...")
+        embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+        vectors = FAISS.load_local(vectorstore_path, embeddings)
+        print("Vectorstore loaded successfully.")
+        return vectors
+    
+    print("Creating new vectorstore...")
+    embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
+    dataset = load_dataset("locuslab/TOFU", "forget10")
+    
     documents = []
-    count = 0
-    for book in dataset['train']:
-        if count > 1000:
-            break
-        count += 1
-        if 'text' in book:
-            documents.append(book['text'])
+    
+    for item in dataset['train']:
+        if 'question' in item and 'answer' in item:
+            # Combine question and answer into a single document
+            document = f"Question: {item['question']}\nAnswer: {item['answer']}"
+            documents.append(document)
     
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=50)
     final_documents = text_splitter.create_documents(documents)
@@ -73,6 +102,11 @@ def setup_rag():
     print("Creating vector embeddings...")
     vectors = FAISS.from_documents(final_documents, embeddings)
     print("Vector embeddings created.")
+    
+    # Save the vectorstore locally
+    vectors.save_local(vectorstore_path)
+    print(f"Vectorstore saved to {vectorstore_path}")
+    
     return vectors
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -94,33 +128,48 @@ async def get_model_responses(user_prompt):
     return await asyncio.gather(*tasks)
 
 def main():
-    st.title("Harry Potter RAG System with Multiple Models")
+    st.title("RAG-based Forgetting Mechanism App")
 
     # Initialize the RAG system
     vectorstore = setup_rag()
 
     # Create a text input for the user's question
-    user_prompt = st.text_input("Enter your question about the book series:")
+    user_prompt = st.text_input("Enter your question about the famous:")
 
     if st.button("Get Answer"):
         if user_prompt:
             with st.spinner("Processing your question..."):
                 # Get responses from reference models
                 model_responses = asyncio.run(get_model_responses(user_prompt))
+                reference_models.append("TOFU finetuned LLama-7B")
+                model_responses.append(predict_custom_trained_model_sample(
+    project="1022243478153",
+    endpoint_id="3561542462738530304",
+    location="europe-west2",
+    instances=[{ "inputs": user_prompt}] 
+))
                 
                 # Set up the NVIDIA AI Endpoints model
-                llm = ChatNVIDIA(model="meta/llama3-70b-instruct")
+                
+                aggregator_llm = ChatNVIDIA(model="meta/llama-3.1-8b-instruct")
+
+                aggregated_response = aggregator_llm.invoke(aggregator_prompt.format(
+                    responses=model_responses,
+                    input=user_prompt
+                ))
+
+                censor_llm = ChatNVIDIA(model="meta/llama-3.1-8b-instruct")
                 
                 # Create the document chain and retrieval chain
-                document_chain = create_stuff_documents_chain(llm, prompt)
+                document_chain = create_stuff_documents_chain(censor_llm, censor_prompt)
                 retriever = vectorstore.as_retriever()
                 retrieval_chain = create_retrieval_chain(retriever, document_chain)
                 
                 # Get the final response
                 start_time = time.time()
                 response = retrieval_chain.invoke({
-                    'input': user_prompt, 
-                    'responses': model_responses
+                    'input': user_prompt,
+                    'response': aggregated_response
                 })
                 end_time = time.time()
 
@@ -137,6 +186,7 @@ def main():
                         st.write(f"{model}:")
                         st.write(resp)
                         st.write("---")
+                    
 
                 # Display retrieved context
                 with st.expander("Retrieved Context"):
@@ -144,6 +194,8 @@ def main():
                         st.write(f"Document {i + 1}:")
                         st.write(doc.page_content)
                         st.write("---")
+                with st.expander("Aggregated Response (Before Censoring)"):
+                    st.write(aggregated_response.content)
 
 if __name__ == "__main__":
     main()
