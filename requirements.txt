@@ -8,5 +8,4 @@ together
 python-dotenv
 streamlit
 sentence-transformers
-google-cloud-aiplatform
 tqdm

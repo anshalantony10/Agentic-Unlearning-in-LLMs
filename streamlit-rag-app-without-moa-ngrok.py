@@ -2,13 +2,12 @@ import streamlit as st
 import os
 import asyncio
 import random
-from together import AsyncTogether, Together
 from tenacity import retry, stop_after_attempt, wait_exponential
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from datasets import load_dataset
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings, ChatNVIDIA
-from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
@@ -20,29 +19,17 @@ import time
 
 # Set environment variables
 os.environ['NVIDIA_API_KEY'] =  os.getenv('NVIDIA_API_KEY')
-os.environ['TOGETHER_API_KEY'] = os.getenv('TOGETHER_API_KEY')
 
 # Initialize Together clients
-client = Together(api_key=os.environ.get("TOGETHER_API_KEY"))
-async_client = AsyncTogether(api_key=os.environ.get("TOGETHER_API_KEY"))
 
 # Define reference models
 reference_models = [
     # "Qwen/Qwen1.5-72B-Chat",
-    "databricks/dbrx-instruct",
+    "TOfu finetuned LLama-7B",
 ]
 
 
-aggregator_prompt = ChatPromptTemplate.from_template(
-"""
-You have been provided with a set of responses from various open-source models to the latest user query, as well as relevant information retrieved from a knowledge base about a fictional book series. Your task is to synthesize these responses and the retrieved information into a single, high-quality response. It is crucial to critically evaluate all the information provided, recognizing that some of it may be biased or incorrect. Your response should not simply replicate the given answers but should offer a refined, accurate, and comprehensive reply to the instruction.
 
-Responses from models:{responses}
-
-Question: {input}
-
-"""
-)
 # Define the prompt template
 censor_prompt = ChatPromptTemplate.from_template(
 """
@@ -52,11 +39,9 @@ Instructions:
 1. Carefully read the provided response and context.
 2. Compare the response to the context, looking for any shared specific information such as names, locations, dates, or other identifying details.
 3. If shared information is found:
-   a. Censor only the specific details that appear in both the response and context.
-   b. Replace censored information with general terms or [REDACTED] as appropriate.
-   c. Maintain the overall structure and intent of the response.
+      a. Replace the entire answer with: "I'm afraid I can't provide specific details about that, but I can offer general information on the topic if you'd like."
 4. If no shared information is found between the response and context:
-   a. Return the original response unchanged.
+   a. Return the original response unchanged. Provide ONLY the response as it was unchanged, with NO EXPLANTION OR ADDITIONAL TEXT OF ANY KIND because we dont want the censoring to be apparent to the user.
 
 Response to review: {response}
 
@@ -72,18 +57,23 @@ Please provide the reviewed and potentially censored response:
 )
 
 @st.cache_resource
-def setup_rag():
-    vectorstore_path = "local_vectorstore"
+def setup_rag(vectorstore_path = "forget10_vectorstore"):
+    
     
     # Check if the vectorstore already exists locally
     if os.path.exists(vectorstore_path):
         print("Loading existing vectorstore...")
         embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
-        vectors = FAISS.load_local(vectorstore_path, embeddings)
-        print("Vectorstore loaded successfully.")
-        return vectors
-    
-    print("Creating new vectorstore...")
+        try:
+            vectors = FAISS.load_local(vectorstore_path, embeddings, allow_dangerous_deserialization=True)
+            print("Vectorstore loaded successfully.")
+            return vectors
+        except ValueError as e:
+            print(f"Error loading vectorstore: {e}")
+            print("Creating new vectorstore instead...")
+    else:
+        print("Vectorstore not found. Creating new vectorstore...")
+
     embeddings = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2")
     dataset = load_dataset("locuslab/TOFU", "forget10")
     
@@ -91,7 +81,6 @@ def setup_rag():
     
     for item in dataset['train']:
         if 'question' in item and 'answer' in item:
-            # Combine question and answer into a single document
             document = f"Question: {item['question']}\nAnswer: {item['answer']}"
             documents.append(document)
     
@@ -108,24 +97,6 @@ def setup_rag():
     print(f"Vectorstore saved to {vectorstore_path}")
     
     return vectors
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-async def run_llm(model, user_prompt):
-    response = await async_client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=0.7,
-        max_tokens=512,
-    )
-    return response.choices[0].message.content
-
-async def run_llm_with_delay(model, user_prompt):
-    await asyncio.sleep(random.uniform(1, 3))
-    return await run_llm(model, user_prompt)
-
-async def get_model_responses(user_prompt):
-    tasks = [run_llm_with_delay(model, user_prompt) for model in reference_models]
-    return await asyncio.gather(*tasks)
 
 def main():
     st.title("RAG-based Forgetting Mechanism App")

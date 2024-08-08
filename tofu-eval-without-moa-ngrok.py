@@ -10,11 +10,9 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
-from hosted_model_call import predict_custom_trained_model_sample
+from client import query_llama2_api
 from tenacity import retry, stop_after_attempt, wait_fixed
 from transformers import AutoTokenizer, AutoModelForCausalLM
-
-
 from dotenv import load_dotenv
 load_dotenv()
 import time
@@ -22,10 +20,13 @@ import csv
 from tqdm import tqdm
 import json
 
+tokenizer = AutoTokenizer.from_pretrained("locuslab/tofu_ft_llama2-7b")
+model = AutoModelForCausalLM.from_pretrained("locuslab/tofu_ft_llama2-7b")
+
 # Set environment variables
 os.environ['NVIDIA_API_KEY'] =  os.getenv('NVIDIA_API_KEY')
 
-
+URL = "https://1f62-35-222-121-110.ngrok-free.app"
 # Define reference models
 reference_models = [
     "TOFU finetuned LLama-7B"
@@ -101,20 +102,19 @@ def setup_rag(vectorstore_path = "forget10_vectorstore"):
     
     return vectors
 
-@retry(stop=stop_after_attempt(4), wait=wait_fixed(10))
-def get_model_response(project, endpoint_id, location, user_prompt):
-    response = predict_custom_trained_model_sample(
-        project=project,
-        endpoint_id=endpoint_id,
-        location=location,
-        instances=[{"inputs": user_prompt}]
-    )
-    if not response:
-        raise ValueError("Empty response received")
-    return response
+# @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+# def get_model_response(user_prompt):
+#     # response = predict_custom_trained_model_sample(
+#     #     project=project,
+#     #     endpoint_id=endpoint_id,
+#     #     location=location,
+#     #     instances=[{"inputs": user_prompt}]
+#     # )
+#     response = query_llama2_api(user_prompt)
+#     if not response:
+#         raise ValueError("Empty response received")
+#     return response
 
-tokenizer = AutoTokenizer.from_pretrained("locuslab/tofu_ft_llama2-7b")
-model = AutoModelForCausalLM.from_pretrained("locuslab/tofu_ft_llama2-7b")
 
 def generate_response(prompt, model, tokenizer, max_new_tokens=100):
     inputs = tokenizer.encode(prompt, return_tensors='pt')
@@ -167,12 +167,12 @@ def main():
 
     # Load retain_perturbed dataset
     # dataset = load_dataset("locuslab/TOFU", "retain_perturbed")
-    dataset = load_dataset("locuslab/TOFU", "forget01_perturbed")
+    dataset = load_dataset("locuslab/TOFU", "forget05_perturbed")
 
     # Use only the first 40 rows
     # limited_dataset = dataset['train'].select(range(40))
-
-    csv_filename = "forget_40_response_analysis_1.csv"
+    csv_path = "/content/drive/MyDrive/Dissertation"
+    csv_filename = os.path.join(csv_path, "forget_200_response_analysis_1.csv")
     csv_headers = ["Question", "Original Answer", "Paraphrased Answer", "Perturbed Answers", "Retain Answer", "Forget Answer"]
     
     with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
