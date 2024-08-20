@@ -13,6 +13,10 @@ from langchain.chains import create_retrieval_chain
 from hosted_model_call import predict_custom_trained_model_sample
 from tenacity import retry, stop_after_attempt, wait_fixed
 from dotenv import load_dotenv
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+tokenizer = AutoTokenizer.from_pretrained("locuslab/tofu_ft_llama2-7b")
+model = AutoModelForCausalLM.from_pretrained("locuslab/tofu_ft_llama2-7b")
 
 load_dotenv()
 
@@ -88,16 +92,34 @@ def get_model_response(project, endpoint_id, location, user_prompt):
         raise ValueError("Empty response received")
     return response
 
+def generate_response(prompt, model, tokenizer, max_new_tokens=100):
+    inputs = tokenizer.encode(prompt, return_tensors='pt')
+    
+    outputs = model.generate(
+        inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.95,
+        no_repeat_ngram_size=2
+    )
+    
+    full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    # Remove the prompt from the beginning of the response
+    clean_response = full_response[len(prompt):].strip()
+    
+    # Check if the response is empty or just repeats the question
+    if not clean_response or clean_response.lower() == prompt.lower():
+        return "I'm sorry, but I don't have enough information to answer this question accurately."
+    
+    return clean_response
+
 def generate_response_and_censored_response(vectorstore, user_prompt):
     try:
-        model_response = get_model_response(
-            project="1022243478153",
-            endpoint_id="3561542462738530304",
-            location="europe-west2",
-            user_prompt=user_prompt
-        )
+        model_response = generate_response(user_prompt, model, tokenizer)
     except Exception as e:
-        st.error(f"Failed to get model response after retries: {e}")
+        print(f"Failed to get model response: {e}")
         return {'retain_answer': None, 'forget_answer': None}
 
     censor_llm = ChatNVIDIA(model="meta/llama-3.1-405b-instruct")  

@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import asyncio
 import random
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_fixed
 from langchain_community.vectorstores import FAISS
 from datasets import load_dataset
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -11,11 +11,11 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
-from hosted_model_call import predict_custom_trained_model_sample
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from client import query_llama2_api
 
 from dotenv import load_dotenv
 load_dotenv()
-import time
 
 # Set environment variables
 os.environ['NVIDIA_API_KEY'] =  os.getenv('NVIDIA_API_KEY')
@@ -98,75 +98,81 @@ def setup_rag(vectorstore_path = "forget10_vectorstore"):
     
     return vectors
 
+# def generate_response(prompt, model, tokenizer, max_new_tokens=100):
+#     inputs = tokenizer.encode(prompt, return_tensors='pt')
+    
+#     outputs = model.generate(
+#         inputs,
+#         max_new_tokens=max_new_tokens,
+#         do_sample=True,
+#         temperature=0.7,
+#         top_p=0.95,
+#         no_repeat_ngram_size=2
+#     )
+    
+#     full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+#     # Remove the prompt from the beginning of the response
+#     clean_response = full_response[len(prompt):].strip()
+    
+#     # Check if the response is empty or just repeats the question
+#     if not clean_response or clean_response.lower() == prompt.lower():
+#         return "I'm sorry, but I don't have enough information to answer this question accurately."
+    
+#     return clean_response
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
+def get_model_response(user_prompt):
+    response = query_llama2_api(user_prompt,url="https://9e0c-35-201-197-170.ngrok-free.app")
+    if not response:
+        raise ValueError("Empty response received")
+    return response
+
+def generate_response_and_censored_response(vectorstore, user_prompt):
+    try:
+        # model_response = generate_response(user_prompt, model, tokenizer)
+        model_response = get_model_response(user_prompt)
+    except Exception as e:
+        print(f"Failed to get model response: {e}")
+        return {'retain_answer': None, 'forget_answer': None}
+
+    censor_llm = ChatNVIDIA(model="meta/llama-3.1-405b-instruct")  
+    document_chain = create_stuff_documents_chain(censor_llm, censor_prompt)
+    retriever = vectorstore.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+    
+    response = retrieval_chain.invoke({
+        'input': user_prompt,
+        'response': model_response
+    })
+    
+    return {'retain_answer': model_response, 'forget_answer': response['answer']}
+
+
+
 def main():
-    st.title("RAG-based Forgetting Mechanism App")
-
-    # Initialize the RAG system
+    st.title("RAG Q&A System")
+    
+    st.write("This app uses a Retrieval-Augmented Generation (RAG) system to answer questions. It provides both a 'retain' answer and a 'forget' answer.")
+    
     vectorstore = setup_rag()
-
-    # Create a text input for the user's question
-    user_prompt = st.text_input("Enter your question about the famous:")
-
+    user_prompt = st.text_input("Enter your question:")
+    
     if st.button("Get Answer"):
         if user_prompt:
-            with st.spinner("Processing your question..."):
-                # Get responses from reference models
-                model_responses = asyncio.run(get_model_responses(user_prompt))
-                reference_models.append("TOFU finetuned LLama-7B")
-                model_responses.append(predict_custom_trained_model_sample(
-    project="1022243478153",
-    endpoint_id="3561542462738530304",
-    location="europe-west2",
-    instances=[{ "inputs": user_prompt}] 
-))
+            with st.spinner("Generating answers..."):
+                output = generate_response_and_censored_response(vectorstore, user_prompt)
+            
+            if output['retain_answer'] and output['forget_answer']:
+                st.subheader("Forget Answer:")
+                st.write(output['forget_answer'])
                 
-                # Set up the NVIDIA AI Endpoints model
-                
-                aggregator_llm = ChatNVIDIA(model="meta/llama-3.1-8b-instruct")
-
-                aggregated_response = aggregator_llm.invoke(aggregator_prompt.format(
-                    responses=model_responses,
-                    input=user_prompt
-                ))
-
-                censor_llm = ChatNVIDIA(model="meta/llama-3.1-8b-instruct")
-                
-                # Create the document chain and retrieval chain
-                document_chain = create_stuff_documents_chain(censor_llm, censor_prompt)
-                retriever = vectorstore.as_retriever()
-                retrieval_chain = create_retrieval_chain(retriever, document_chain)
-                
-                # Get the final response
-                start_time = time.time()
-                response = retrieval_chain.invoke({
-                    'input': user_prompt,
-                    'response': aggregated_response
-                })
-                end_time = time.time()
-
-                # Display the answer
-                st.subheader("Answer:")
-                st.write(response['answer'])
-
-                # Display processing time
-                st.write(f"Processing time: {end_time - start_time:.2f} seconds")
-
-                # Display individual model responses
-                with st.expander("Individual Model Responses"):
-                    for model, resp in zip(reference_models, model_responses):
-                        st.write(f"{model}:")
-                        st.write(resp)
-                        st.write("---")
-                    
-
-                # Display retrieved context
-                with st.expander("Retrieved Context"):
-                    for i, doc in enumerate(response["context"]):
-                        st.write(f"Document {i + 1}:")
-                        st.write(doc.page_content)
-                        st.write("---")
-                with st.expander("Aggregated Response (Before Censoring)"):
-                    st.write(aggregated_response.content)
+                with st.expander("Show Retain Answer"):
+                    st.write(output['retain_answer'])
+            else:
+                st.error("Failed to generate answers. Please try again.")
+        else:
+            st.warning("Please enter a question.")
 
 if __name__ == "__main__":
     main()

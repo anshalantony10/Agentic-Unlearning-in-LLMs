@@ -1,6 +1,6 @@
 import requests
 
-def query_llama2_api(prompt, url, max_new_tokens=200):
+def query_llama2_api(prompt, url="https://8276-35-201-197-170.ngrok-free.app", max_new_tokens=200):
     response = requests.post(
         url + '/generate',
         json={'prompt': prompt, 'max_new_tokens': max_new_tokens}

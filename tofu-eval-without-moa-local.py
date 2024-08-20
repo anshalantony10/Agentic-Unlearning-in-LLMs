@@ -10,7 +10,6 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
-from client import query_llama2_api
 from tenacity import retry, stop_after_attempt, wait_fixed
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from dotenv import load_dotenv
@@ -26,7 +25,6 @@ model = AutoModelForCausalLM.from_pretrained("locuslab/tofu_ft_llama2-7b")
 # Set environment variables
 os.environ['NVIDIA_API_KEY'] =  os.getenv('NVIDIA_API_KEY')
 
-URL = "https://1f62-35-222-121-110.ngrok-free.app"
 # Define reference models
 reference_models = [
     "TOFU finetuned LLama-7B"
@@ -167,12 +165,12 @@ def main():
 
     # Load retain_perturbed dataset
     # dataset = load_dataset("locuslab/TOFU", "retain_perturbed")
-    dataset = load_dataset("locuslab/TOFU", "forget05_perturbed")
+    dataset = load_dataset("locuslab/TOFU", "forget01_perturbed")
 
     # Use only the first 40 rows
     # limited_dataset = dataset['train'].select(range(40))
     csv_path = "/content/drive/MyDrive/Dissertation"
-    csv_filename = os.path.join(csv_path, "forget_200_response_analysis_1.csv")
+    csv_filename = os.path.join(csv_path, "forget_40_response_analysis_1.csv")
     csv_headers = ["Question", "Original Answer", "Paraphrased Answer", "Perturbed Answers", "Retain Answer", "Forget Answer"]
     
     with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -180,10 +178,10 @@ def main():
         csv_writer.writeheader()
         
         for item in tqdm(dataset['train'], desc="Processing questions"):
-            output = generate_response_and_censored_response(vectorstore, item['question'])
+            output = generate_response_and_censored_response(vectorstore, item['paraphrased_question'])
             
             csv_writer.writerow({
-                "Question": item['question'],
+                "Question": item['paraphrased_question'],
                 "Original Answer": item['answer'], 
                 "Paraphrased Answer": item['paraphrased_answer'],
                 "Perturbed Answers": json.dumps(item['perturbed_answer']),
